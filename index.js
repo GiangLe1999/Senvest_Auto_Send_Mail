@@ -48,14 +48,28 @@ const CompanyEmailSchema = new mongoose.Schema({
 
 const CompanyEmail = mongoose.model("CompanyEmail", CompanyEmailSchema);
 
+const nodemailer = require("nodemailer");
+
 const transporter = nodemailer.createTransport({
   host: "smtp.hostinger.com",
   port: 465,
-  service: "Hostinger",
   secure: true,
   auth: {
     user: "senvestgroup@senvest.org",
     pass: "0505@Senvest",
+  },
+  dkim: {
+    domainName: "senvest.org",
+    keySelector: "senvest",
+    privateKey: `-----BEGIN RSA PRIVATE KEY-----
+MIIBOgIBAAJBAL/aU5GdF2fEylBcJH2UEX/Fey8G4M8dyIkVvFqZPUtwc2gk7v9F
+Fz2gPRKEUrPAdN8I1mRVGhGoUoikX0x8o28CAwEAAQJBALRf1wCqig6yDZ9K8+Uo
+ibfYF3G7LPI8dmowf8bZzmtm18fgDpXY7qq9y0fQWVh7wTuMZ0SIR3M7Xp35BHHx
+jNECIQDzRpv33yTq3cvDGWWkCFiPnxYaT5YmoI20OiyRnZGf7wIhAMZ9Y6U+mf6G
+OUgQK3ZPP/+Rmh0cMIB9F7Rekkscd5vFAiAHazWzA9DD9sXkL3cR9HQL5RWWZkFy
+5M4ShhvFoipPEwIhAOF9zkRj2ECr6oYmhLqOWT9J2bdwMnxlPnvMcech8JyzAiB3
+zXcbMiApHRRSpfpvT5E8ktlsw9iSvNO1InXq56Ed0w==
+-----END RSA PRIVATE KEY-----`,
   },
 });
 
@@ -107,7 +121,7 @@ const sendEmails = async (req) => {
         );
 
         const mailOptions = {
-          from: "senvestgroup@senvest.org",
+          from: '"Senvest Group" <senvestgroup@senvest.org>',
           to: emails[i].email,
           subject: "Thư Kêu Gọi Ủng Hộ Trẻ Em Vùng Sâu Vùng Xa Việt Nam",
           html: template,
@@ -118,6 +132,11 @@ const sendEmails = async (req) => {
               encoding: "base64",
             },
           ],
+          headers: {
+            "X-Priority": "3",
+            "X-Mailer": "Nodemailer",
+            "List-Unsubscribe": "<mailto:unsubscribe@senvest.org>",
+          },
         };
 
         transporter.sendMail(mailOptions, async (error, info) => {
