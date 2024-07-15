@@ -1,20 +1,20 @@
 const fs = require("fs");
 const csv = require("csv-parser");
 
-const inputCsvFile = "14k-email-kh.csv";
-const outputJsonFile = "14k-email-kh.json";
+const inputCsvFile = "../../files/14k-email-kh.csv";
+const outputJsonFile = "../../files/14k-email-kh.json";
 
 const results = [];
 
-fs.createReadStream(inputCsvFile, { encoding: "utf8" }) // Ensure the file is read with UTF-8 encoding
+fs.createReadStream(inputCsvFile, { encoding: "utf8" })
   .pipe(
     csv({
-      mapHeaders: ({ header }) => header.trim(), // Trim headers to remove any leading/trailing spaces
+      mapHeaders: ({ header }) => header.trim(),
     })
   )
   .on("data", (data) => {
     results.push({
-      companyName: data["Ho_ten"]?.trim(), // Use exact key to access data
+      companyName: data["Ho_ten"]?.trim(),
       gender: data["Danh_xung"]?.trim(),
       email: data["Email"]?.trim(),
       status: "Not Sent",
@@ -25,5 +25,5 @@ fs.createReadStream(inputCsvFile, { encoding: "utf8" }) // Ensure the file is re
     console.log("CSV file successfully converted to JSON");
   })
   .on("error", (error) => {
-    console.error("Error reading CSV file:", error); // Handle errors
+    console.error("Error reading CSV file:", error);
   });
