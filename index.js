@@ -4,9 +4,9 @@ const bodyParser = require("body-parser");
 const nodemailer = require("nodemailer");
 const fs = require("fs");
 const cors = require("cors");
-const { emailListForCreating } = require("./src/data");
+const { emailListForCreating, textVersionForEmail } = require("./src/data");
 const CompanyEmail = require("./src/models/Company");
-const { isValidEmailSyntax, checkDomain, checkSMTP } = require("./src/utils");
+const { resolveMX, sendMailForTest } = require("./src/utils");
 require("dotenv").config();
 
 const PORT = 9002;
@@ -24,161 +24,179 @@ app.use(
 mongoose
   .connect(process.env.DB_URI)
   .then(() => console.log("MongoDB Connected"))
-  .catch((err) => console.log(err));
+  .catch((err) => console.error("MongoDB Connection Error:", err));
 
 // Attachment
-let pdfAttachment = fs.readFileSync("./files/Điều Lệ Quỹ Trái Tim Việt.pdf");
+let pdfAttachment;
+try {
+  pdfAttachment = fs.readFileSync("./files/Điều Lệ Quỹ Trái Tim Việt.pdf");
+} catch (err) {
+  console.error("Error reading PDF file:", err);
+}
+
 // HTML template
-let template = fs.readFileSync("./files/mail-template.html", {
-  encoding: "utf-8",
-});
+let template;
+try {
+  template = fs.readFileSync("./files/mail-template.html", {
+    encoding: "utf-8",
+  });
+} catch (err) {
+  console.error("Error reading HTML template file:", err);
+}
 
 // Configure transporter
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST,
   port: Number(process.env.SMTP_PORT),
-  secure: true,
+  secure: process.env.SMTP_PORT === "465",
   auth: {
     user: process.env.SMTP_USER,
-    pass: process.env.STMP_PASSWORD,
+    pass: process.env.SMTP_PASSWORD,
   },
+});
+
+// Test SMTP connection
+transporter.verify(function (error, success) {
+  if (error) {
+    console.error("SMTP connection error:", error);
+  } else {
+    console.log("SMTP connection successful.");
+  }
 });
 
 // Send mail function
 const sendEmails = async (req) => {
   try {
+    // Step 1: Get not sent email
     const emails = await CompanyEmail.find({
       status: "Not Sent",
       email: { $regex: /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/ },
     }).limit(1);
 
     if (emails.length === 0) {
-      return { success: false, message: "Done." };
+      return { success: false, message: "Out of Not Sent emails" };
     }
 
-    for (let i = 0; i < emails.length; i++) {
-      const emailDoc = emails[i];
-      const email = emailDoc.email;
+    const emailDoc = emails[0];
+    const email = emailDoc.email;
+    const domain = email.split("@")[1];
 
-      if (!isValidEmailSyntax(email)) {
-        console.log(`${email} has invalid syntax.`);
-        await CompanyEmail.findByIdAndUpdate(emailDoc._id, {
-          status: "Invalid Syntax",
+    // Step 2: Resolve MX and check email validity
+    let smtpServer;
+    try {
+      smtpServer = await new Promise((resolve, reject) => {
+        resolveMX(domain, (err, smtpServer) => {
+          if (err) {
+            console.error("Error resolving MX:", err);
+            CompanyEmail.findByIdAndUpdate(emailDoc._id, {
+              status: "MX Error",
+            }).exec();
+            reject(err);
+          } else {
+            resolve(smtpServer);
+          }
         });
-        continue;
-      }
+      });
+    } catch (err) {
+      console.error("Error resolving MX:", err);
+      return; // Exit function if there's an error resolving MX
+    }
 
-      const domain = email.split("@")[1];
-      const domainIsValid = await checkDomain(domain);
-
-      if (!domainIsValid) {
-        console.log(`${email} has an invalid domain.`);
-        await CompanyEmail.findByIdAndUpdate(emailDoc._id, {
-          status: "Invalid Domain",
-        });
-        continue;
-      }
-
-      const smtpIsValid = await checkSMTP(email);
-      if (!smtpIsValid) {
-        console.log(`${email} has an invalid mailbox.`);
-        await CompanyEmail.findByIdAndUpdate(emailDoc._id, {
-          status: "Invalid Mailbox",
-        });
-        continue;
-      }
-
-      template = template.replaceAll("{{COMPANY_NAME}}", emailDoc.companyName);
-      template = template.replaceAll(
-        "{{GENDER}}",
-        emailDoc.gender === "M" ? "Ông" : "Bà"
+    // Step 3: Test email existence or handle other errors using sendMailForTest
+    try {
+      const { err, exists } = await sendMailForTest(
+        smtpServer,
+        "legiangbmt09@gmail.com",
+        email
       );
 
-      const mailOptions = {
-        from: '"Senvest Group" <senvestgroup@senvest.org>',
-        to: email,
-        subject: "Thư Kêu Gọi Ủng Hộ Trẻ Em Vùng Sâu Vùng Xa Việt Nam",
-        html: template,
-        // Bao gồm cả text và html version
-        text: "",
-        attachments: [
-          {
-            filename: "Điều Lệ Quỹ Trái Tim Việt.pdf",
-            content: pdfAttachment,
-            encoding: "base64",
-          },
-        ],
-        headers: {
-          "X-Priority": "3",
-          "X-Mailer": "Nodemailer",
-          "List-Unsubscribe": "<mailto:unsubscribe@senvest.org>",
-        },
-      };
+      if (err && !exists) {
+        throw err(err);
+      } else {
+        // Step 4: Prepare email template and options
+        template = template.replaceAll(
+          "{{COMPANY_NAME}}",
+          emailDoc.companyName
+        );
+        template = template.replaceAll(
+          "{{GENDER}}",
+          emailDoc.gender === "M" ? "Ông" : "Bà"
+        );
 
-      transporter.sendMail(mailOptions, async (error, info) => {
-        if (error) {
-          console.log(error);
-          console.log("error", email);
-          await CompanyEmail.findByIdAndUpdate(emailDoc._id, {
-            status: "Failed",
-          });
-        } else {
-          console.log("Email sent: " + email);
-          await CompanyEmail.findByIdAndUpdate(emailDoc._id, {
-            status: "Sent",
-          });
-        }
-      });
+        const mailOptions = {
+          from: '"Senvest Group" <senvestgroup@senvest.org>',
+          to: email,
+          subject: "Thư Kêu Gọi Ủng Hộ Trẻ Em Vùng Sâu Vùng Xa Việt Nam",
+          html: template,
+          text: textVersionForEmail,
+          attachments: [
+            {
+              filename: "Điều Lệ Quỹ Trái Tim Việt.pdf",
+              content: pdfAttachment,
+              encoding: "base64",
+            },
+          ],
+          headers: {
+            "X-Priority": "3",
+            "X-Mailer": "Nodemailer",
+            "List-Unsubscribe": "<mailto:unsubscribe@senvest.org>",
+          },
+        };
+
+        // Step 5: Send email and update status based on response
+        transporter.sendMail(mailOptions, async (err, info) => {
+          if (err) {
+            console.error(err, email);
+            console.log("Failed to send email to", email);
+            await CompanyEmail.findByIdAndUpdate(emailDoc._id, {
+              status: "Failed",
+            }).exec();
+          } else {
+            console.log("Email sent successfully to", email);
+            await CompanyEmail.findByIdAndUpdate(emailDoc._id, {
+              status: "Sent",
+            }).exec();
+          }
+        });
+      }
+    } catch (err) {
+      console.log(err.err, email);
+      await CompanyEmail.findByIdAndUpdate(emailDoc._id, {
+        status: err.err,
+      }).exec();
     }
-    return { success: true, message: "Processing emails." };
   } catch (err) {
-    console.log("err", err);
-    return { success: false, message: "Failed to send email." };
+    console.error("Error fetching emails:", err);
   }
 };
 
 // Endpoint for start sending emails
 app.post("/send-emails", async (req, res) => {
   let isSending = false;
-  let attempts = 0;
-  const maxAttempts = 10; // Maximum attempts to avoid infinite loops
 
   const processEmails = async () => {
     if (isSending) return; // Prevent overlapping intervals
     isSending = true;
-    attempts++;
 
     try {
-      const result = await sendEmails(req);
-
-      if (result && !result.success) {
-        clearInterval(intervalId);
-        isSending = false;
-        return res.status(500).json(result);
-      }
-
-      if (attempts >= maxAttempts) {
-        clearInterval(intervalId);
-        return res
-          .status(200)
-          .json({ success: true, message: "Emails processed." });
-      }
+      await sendEmails(req);
     } catch (err) {
       clearInterval(intervalId);
       isSending = false;
+      console.log(err);
       return res.status(500).json({
         success: false,
-        message: "An error occurred while sending emails.",
+        message: "An error occurred while sending emails",
       });
     } finally {
       isSending = false;
     }
   };
 
-  // Set interval to process emails every 5 minutes
-  const intervalId = setInterval(processEmails, 5 * 60 * 1000);
+  // Set interval to process emails every 2 minutes
+  const intervalId = setInterval(processEmails, 0.2 * 60 * 1000);
 
-  // Process emails immediately for the first time
+  // Process emails immediately for the first time without waiting for the first interval
   await processEmails();
 });
 

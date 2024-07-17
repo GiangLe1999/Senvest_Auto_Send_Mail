@@ -1,60 +1,58 @@
 const dns = require("dns");
 const net = require("net");
 
-// Function to validate email syntax
-function isValidEmailSyntax(email) {
-  const regex = /^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$/;
-  return regex.test(email);
+// Hàm để phân giải DNS và tìm SMTP server của domain
+function resolveMX(domain, callback) {
+  dns.resolveMx(domain, (err, addresses) => {
+    if (err) {
+      callback(err, null);
+      return;
+    }
+    // Lấy MX record đầu tiên (thường là có priority thấp nhất)
+    const mxRecord = addresses[0];
+    // mxRecord echange là stmp server của domain
+    callback(null, mxRecord.exchange);
+  });
 }
 
-// Function to validate domain
-function checkDomain(domain) {
+// Hàm gửi email thông qua SMTP server
+async function sendMailForTest(smtpServer, fromEmail, toEmail) {
   return new Promise((resolve, reject) => {
-    dns.resolveMx(domain, (err, addresses) => {
-      if (err || addresses.length === 0) {
-        resolve(false);
+    const client = net.createConnection(25, smtpServer);
+    let exists = false;
+    let error = null;
+
+    client.setEncoding("utf8");
+
+    client.on("connect", () => {
+      client.write(`HELO example.com\r\n`);
+      client.write(`MAIL FROM:<${fromEmail}>\r\n`);
+      client.write(`RCPT TO:<${toEmail}>\r\n`);
+      client.write(`QUIT\r\n`);
+    });
+
+    client.on("data", (data) => {
+      if (data.includes("450") || data.includes("550")) {
+        exists = false;
+        error = "Not Exists";
+      } else if (data.includes("452") || data.includes("552")) {
+        exists = false;
+        error = "Out of Storage Space";
+      }
+    });
+
+    client.on("end", () => {
+      if (error) {
+        reject({ err: error, exists: exists });
       } else {
-        resolve(true);
+        resolve({ exists: true });
       }
+    });
+
+    client.on("error", (err) => {
+      reject({ err: err, exists: false });
     });
   });
 }
 
-// Function to validate SMTP
-function checkSMTP(email) {
-  return new Promise((resolve, reject) => {
-    const domain = email.split("@")[1];
-    dns.resolveMx(domain, (err, addresses) => {
-      if (err || addresses.length === 0) {
-        resolve(false);
-        return;
-      }
-
-      const exchange = addresses[0].exchange;
-      const socket = net.createConnection(25, exchange);
-
-      socket.on("connect", () => {
-        socket.write(`HELO ${domain}\r\n`);
-        socket.write(`MAIL FROM:<test@${domain}>\r\n`);
-        socket.write(`RCPT TO:<${email}>\r\n`);
-        socket.write("QUIT\r\n");
-      });
-
-      socket.on("data", (data) => {
-        const response = data.toString();
-        if (response.includes("250")) {
-          resolve(true);
-        } else {
-          resolve(false);
-        }
-        socket.end();
-      });
-
-      socket.on("error", () => {
-        resolve(false);
-      });
-    });
-  });
-}
-
-module.exports = { isValidEmailSyntax, checkDomain, checkSMTP };
+module.exports = { resolveMX, sendMailForTest };

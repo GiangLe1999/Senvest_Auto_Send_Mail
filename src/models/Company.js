@@ -1,3 +1,5 @@
+const mongoose = require("mongoose");
+
 const CompanyEmailSchema = new mongoose.Schema({
   companyName: String,
   email: {
@@ -11,15 +13,7 @@ const CompanyEmailSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: [
-      "Not Sent",
-      "Sent",
-      "Failed",
-      "Dead Mail",
-      "Invalid Syntax",
-      "Invalid Domain",
-      "Invalid Mailbox",
-    ],
+    enum: ["Not Sent", "Sent", "Failed", "Not Exists", "Out of Storage Space"],
     default: "Not Sent",
   },
 });
